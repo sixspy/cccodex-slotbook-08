@@ -22,7 +22,7 @@ def list_audit(authorization: AuthHeader = None, limit: int = 100):
 
 @router.get("/api/proof/{party_key}")
 def proof(party_key: str, authorization: AuthHeader = None):
-    """按当事人互证：占位/正式/候补是否同源可读。"""
+    """按当事人互证：占位/正式/候补是否同源可读，同档同客占位唯一。"""
     require_user(authorization)
     with connect() as conn:
         holds = conn.execute(
@@ -34,9 +34,18 @@ def proof(party_key: str, authorization: AuthHeader = None):
         waits = conn.execute(
             "SELECT * FROM waitlist WHERE party_key=? ORDER BY id DESC", (party_key,)
         ).fetchall()
+        # 同态判据：同一档期下该当事人的占位中行必须唯一
+        dup_rows = conn.execute(
+            """SELECT slot_id, COUNT(*) c FROM holds
+               WHERE party_key=? AND status='占位中' GROUP BY slot_id HAVING c>=2""",
+            (party_key,),
+        ).fetchall()
+        hold_items = [dict(r) for r in holds]
         return {
             "party_key": party_key,
-            "holds": [dict(r) for r in holds],
+            "holds": hold_items,
             "bookings": [dict(r) for r in books],
             "waitlist": [dict(r) for r in waits],
+            "hold_drift": bool(dup_rows),
+            "duplicate_slot_ids": [r["slot_id"] for r in dup_rows],
         }

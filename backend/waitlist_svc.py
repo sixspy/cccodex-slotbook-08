@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from auth import AuthHeader, require_user, require_writer
 from db import connect, write_audit
+from hold_svc import _open_holds_for_party
 from locks import release, require_lock
 
 router = APIRouter(tags=["waitlist"])
@@ -63,6 +64,39 @@ def promote_wait(body: PromoteIn, authorization: AuthHeader = None):
         try:
             if wrow["status"] != "候补中":
                 raise HTTPException(409, "候补非候补中")
+            # 甲路径幂等：晋升也是 holds 写入旁路，同档同客占位中即拒写
+            existing = _open_holds_for_party(conn, slot["id"], wrow["party_key"])
+            if len(existing) >= 2:
+                write_audit(
+                    conn,
+                    user,
+                    "hold_idempotency_drift",
+                    wrow["party_key"],
+                    {
+                        "slot": slot["code"],
+                        "hold_ids": [r["id"] for r in existing],
+                        "via": "waitlist_promote",
+                    },
+                )
+                conn.commit()
+                raise HTTPException(
+                    409,
+                    "同档同客存在多条占位中（偏航现场），晋升已拒写并留痕",
+                )
+            if len(existing) == 1:
+                write_audit(
+                    conn,
+                    user,
+                    "hold_idempotent_reject",
+                    wrow["party_key"],
+                    {
+                        "slot": slot["code"],
+                        "hold_id": existing[0]["id"],
+                        "via": "waitlist_promote",
+                    },
+                )
+                conn.commit()
+                raise HTTPException(409, "同档同客已有占位中，候补晋升已拒写")
             pending = conn.execute(
                 "SELECT COALESCE(SUM(seats),0) s FROM holds WHERE slot_id=? AND status='占位中'",
                 (slot["id"],),
@@ -92,6 +126,11 @@ def promote_wait(body: PromoteIn, authorization: AuthHeader = None):
             )
             conn.commit()
             return {"ok": True, "hold_id": cur.lastrowid}
+        except HTTPException:
+            raise
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             release(conn, lock_key, user)
             conn.commit()

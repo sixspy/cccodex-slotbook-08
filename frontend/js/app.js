@@ -28,6 +28,8 @@ createApp({
     const dash = ref({});
     const holdForm = ref({ slot_code: "S-AM-01", party_key: "P-NEW", seats: 1 });
     const confirmId = ref(1);
+    const proofKey = ref("P-NEW");
+    const proof = ref(null);
 
     function logout() {
       token.value = "";
@@ -78,13 +80,18 @@ createApp({
       try { actionErr.value = ""; await api.post("/api/waitlist/promote", { wait_id: id }); await refresh(); }
       catch (e) { actionErr.value = e.message; }
     }
+    async function loadProof() {
+      try { actionErr.value = ""; proof.value = await api.get(`/api/proof/${encodeURIComponent(proofKey.value)}`); }
+      catch (e) { actionErr.value = e.message; }
+    }
 
     onMounted(() => { if (token.value) refresh(); });
 
     return {
       token, user, username, password, err, actionErr, tab, nav,
       slots, holds, waitlist, bookings, recon, audits, contention, dash,
-      holdForm, confirmId, login, logout, refresh, doHold, doConfirm, promoteWait,
+      holdForm, confirmId, proofKey, proof,
+      login, logout, refresh, doHold, doConfirm, promoteWait, loadProof,
     };
   },
   template: `

@@ -32,7 +32,17 @@ def list_slots(authorization: AuthHeader = None):
         rows = conn.execute(
             "SELECT * FROM slots ORDER BY start_at, code"
         ).fetchall()
-        return {"items": [dict(r) for r in rows]}
+        items = []
+        for row in rows:
+            data = dict(row)
+            pending = conn.execute(
+                "SELECT COALESCE(SUM(seats),0) s FROM holds WHERE slot_id=? AND status='占位中'",
+                (row["id"],),
+            ).fetchone()["s"]
+            data["pending_seats"] = int(pending)
+            data["free"] = int(row["capacity"]) - int(row["booked"]) - int(pending)
+            items.append(data)
+        return {"items": items}
 
 
 @router.get("/api/slots/{code}")
@@ -42,7 +52,15 @@ def get_slot(code: str, authorization: AuthHeader = None):
         row = conn.execute("SELECT * FROM slots WHERE code=?", (code,)).fetchone()
         if not row:
             raise HTTPException(404, "档期不存在")
-        return dict(row)
+        data = dict(row)
+        # 余席同态：容量 - 已确认 - 占位中席数（与占位/候补口径一致）
+        pending = conn.execute(
+            "SELECT COALESCE(SUM(seats),0) s FROM holds WHERE slot_id=? AND status='占位中'",
+            (row["id"],),
+        ).fetchone()["s"]
+        data["pending_seats"] = int(pending)
+        data["free"] = int(row["capacity"]) - int(row["booked"]) - int(pending)
+        return data
 
 
 @router.post("/api/slots")
